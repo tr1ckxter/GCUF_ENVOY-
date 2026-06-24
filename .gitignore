@@ -43,3 +43,24 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Python backend
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment variables — never commit API keys
+.env
+backend/.env
+
+# ChromaDB database — too large for GitHub
+db/
+backend/db/
+
+# University PDF documents
+data/
+backend/data/
+
+# Python cache in backend folder
+backend/__pycache__/
