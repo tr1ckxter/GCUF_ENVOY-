@@ -202,9 +202,6 @@ def fetch_from_source(
         if d.metadata.get("source") == source_path
     )
 
-    # Fee tables for BS CS/SE/IT programs are always on page 2
-
-
     logger.info(f"  Relevant pages in {os.path.basename(source_path)}: {relevant_pages}")
 
     if not relevant_pages and fallback_pages:
