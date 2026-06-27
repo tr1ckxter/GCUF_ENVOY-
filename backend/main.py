@@ -127,31 +127,36 @@ def fetch_relevant_chunks(
     query: str,
     category: str,
 ) -> list[Document]:
-    """
-    Retrieve relevant chunks from ChromaDB using compound metadata filters.
-    Filters directly at the database engine level instead of loading
-    everything into memory and filtering manually in Python.
-    """
     faculty = detect_faculty(query)
     degree = detect_degree(query)
 
-    # Build compound filter
+    # Always filter by category
     filters = {"category": {"$eq": category}}
 
-    if faculty != "general":
+    # Only add faculty filter if actually detected
+    if faculty != "general" and degree == "general":
         filters = {"$and": [
             {"category": {"$eq": category}},
             {"faculty": {"$eq": faculty}},
         ]}
 
-    if degree != "general":
+    # Add both faculty and degree if both detected
+    if faculty != "general" and degree != "general":
         filters = {"$and": [
             {"category": {"$eq": category}},
             {"faculty": {"$eq": faculty}},
             {"degree_level": {"$eq": degree}},
         ]}
 
+    # If only degree detected, filter by category and degree
+    if faculty == "general" and degree != "general":
+        filters = {"$and": [
+            {"category": {"$eq": category}},
+            {"degree_level": {"$eq": degree}},
+        ]}
+
     logger.info(f"  Metadata filters: {filters}")
+    logger.info(f"  Detected — category: {category}, faculty: {faculty}, degree: {degree}")
 
     docs = app.state.vector_db.max_marginal_relevance_search(
         query, k=6, fetch_k=20,
