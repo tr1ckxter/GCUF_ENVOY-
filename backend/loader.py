@@ -3,6 +3,7 @@ import shutil
 import logging
 import pdfplumber
 from typing import List, Optional
+from config import detect_category, detect_faculty, detect_degree
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_chroma import Chroma
@@ -23,7 +24,6 @@ CHUNK_SIZE = 800
 CHUNK_OVERLAP = 150
 BATCH_SIZE = 500
 
-
 def get_embeddings() -> HuggingFaceEmbeddings:
     """
     Initialize HuggingFace sentence-transformers embedding model.
@@ -36,7 +36,6 @@ def get_embeddings() -> HuggingFaceEmbeddings:
         model_kwargs={"device": "cpu"},
         encode_kwargs={"normalize_embeddings": True}
     )
-
 
 def extract_pdf_with_tables(file_path: str) -> List[Document]:
     """
@@ -104,6 +103,10 @@ def extract_pdf_with_tables(file_path: str) -> List[Document]:
                                 "source": file_path,
                                 "page": page_num + 1,
                                 "file_name": file_name,
+                                "category": detect_category(file_name),
+                                "faculty": detect_faculty(full_content),
+                                "degree_level": detect_degree(full_content),
+                                "content_type": "table" if table_texts else "text",
                             }
                         ))
                         pages_processed += 1

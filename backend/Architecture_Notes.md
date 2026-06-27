@@ -200,3 +200,17 @@ v2.0 — Polished version (current)
 - Added file_name to metadata
 - Secured API key via .env
 - Fixed Windows path separator bug
+
+Phase 2: Day 1
+
+- Created config.py with metadata keyword mappings (FACULTY_KEYWORDS, 
+  DEGREE_KEYWORDS, FEE_QUERY_KEYWORDS, ADMISSION_QUERY_KEYWORDS)
+- Added detection functions: detect_from_keywords(), detect_faculty(), 
+  detect_degree(), detect_query_type()
+- detect_query_type() replaces the Groq LLM classifier — 
+  no API call needed for classification anymore
+- fetch_relevant_chunks() replaces fetch_from_source() — 
+  ChromaDB now filters at engine level using compound metadata filters
+  instead of loading entire source PDFs into memory
+- New metadata fields added to every chunk at ingestion: 
+  category, faculty, degree_level, content_type

@@ -2,9 +2,8 @@ import os
 import hashlib
 import logging
 from contextlib import asynccontextmanager
-from tkinter.filedialog import test
 from typing import Optional
-
+from config import detect_category, detect_faculty, detect_degree, detect_query_type
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -29,15 +28,6 @@ EMBEDDING_MODEL   = "sentence-transformers/all-MiniLM-L6-v2"
 GROQ_MODEL        = "llama-3.3-70b-versatile"
 PERSIST_DIRECTORY = "./db"
 GROQ_API_KEY      = os.environ.get("GROQ_API_KEY", "")
-
-FEE_SOURCE        = os.path.join(".", "data", "Fee-Structure-2025.pdf")
-ADMISSION_SOURCE  = os.path.join(".", "data", "Admission-Policy-2025-26.pdf")
-PROSPECTUS_SOURCE = os.path.join(".", "data", "Prospectus-2025-v1.pdf")
-
-CS_KEYWORDS = [
-    "software", "computer science", "information technology",
-    "data science", "data analytics", "bs cs", "bscs", "bsse", "bsit"
-]
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
 @asynccontextmanager
@@ -133,87 +123,43 @@ def ask_groq(
     )
     return response.choices[0].message.content
 
-
-def detect_query_type(query: str) -> str:
-    """
-    Classify an incoming query into one of three categories using the LLM.
-
-    Uses a minimal prompt with max_tokens=5 to keep classification fast
-    and cheap. Falls back to 'general' if the response is ambiguous.
-
-    Args:
-        query: The raw user question.
-
-    Returns:
-        One of: 'fee', 'admission', 'general'
-    """
-    system = "You are a classifier. Reply with exactly one word only: fee, admission, or general."
-    user = f"""fee = fees, tuition, charges, costs, payment, how much, total fee, semester fee
-admission = applying, eligibility, merit, deadlines, requirements, enrollment, entry test
-general = history, departments, programs, facilities, campus, courses, vision, mission, faculty
-
-Question: {query}
-Category:"""
-
-    result = ask_groq(system, user, max_tokens=5).strip().lower()
-    logger.info(f"  Query classified as: '{result}'")
-
-    if "fee" in result:
-        return "fee"
-    elif "admission" in result:
-        return "admission"
-    else:
-        return "general"
-
-
-def fetch_from_source(
-    source_path: str,
+def fetch_relevant_chunks(
     query: str,
-    fallback_pages: Optional[list] = None
-) -> tuple[list[Document], list[Document]]:
+    category: str,
+) -> list[Document]:
     """
-    Retrieve relevant document chunks from a specific source PDF.
-
-    Uses ChromaDB metadata filtering to scope retrieval to the correct
-    file, then uses MMR similarity search to identify relevant pages.
-    For CS/SE queries, forces inclusion of page 2 where BS program
-    fees are located.
-
-    Args:
-        source_path: Exact source path as stored in ChromaDB metadata.
-        query: User query used for similarity search.
-        fallback_pages: Pages to use if similarity search returns nothing.
-
-    Returns:
-        Tuple of (filtered_docs, all_similar_docs).
+    Retrieve relevant chunks from ChromaDB using compound metadata filters.
+    Filters directly at the database engine level instead of loading
+    everything into memory and filtering manually in Python.
     """
-    all_data = app.state.vector_db.get(
-        where={"source": {"$eq": source_path}},
-        include=["documents", "metadatas"]
+    faculty = detect_faculty(query)
+    degree = detect_degree(query)
+
+    # Build compound filter
+    filters = {"category": {"$eq": category}}
+
+    if faculty != "general":
+        filters = {"$and": [
+            {"category": {"$eq": category}},
+            {"faculty": {"$eq": faculty}},
+        ]}
+
+    if degree != "general":
+        filters = {"$and": [
+            {"category": {"$eq": category}},
+            {"faculty": {"$eq": faculty}},
+            {"degree_level": {"$eq": degree}},
+        ]}
+
+    logger.info(f"  Metadata filters: {filters}")
+
+    docs = app.state.vector_db.max_marginal_relevance_search(
+        query, k=6, fetch_k=20,
+        filter=filters
     )
 
-    similar_docs = app.state.vector_db.max_marginal_relevance_search(
-        query, k=6, fetch_k=20
-    )
-
-    relevant_pages = set(
-        d.metadata.get("page")
-        for d in similar_docs
-        if d.metadata.get("source") == source_path
-    )
-
-    logger.info(f"  Relevant pages in {os.path.basename(source_path)}: {relevant_pages}")
-
-    if not relevant_pages and fallback_pages:
-        relevant_pages = set(fallback_pages)
-
-    docs = [
-        Document(page_content=doc, metadata=meta)
-        for doc, meta in zip(all_data["documents"], all_data["metadatas"])
-        if meta.get("page") in relevant_pages
-    ]
-
-    return docs, similar_docs
+    logger.info(f"  Retrieved {len(docs)} chunks via metadata filter")
+    return docs
 
 
 def build_context(docs: list[Document]) -> str:
@@ -283,14 +229,12 @@ async def ask_question(request: Request):
 
         query_type = detect_query_type(query)
 
-        if query_type == "fee":
-            docs, similar_docs = fetch_from_source(
-                FEE_SOURCE, query,
-                fallback_pages=list(range(1, 6))
-            )
-            extra = [d for d in similar_docs if d.metadata.get("source") != FEE_SOURCE]
-            docs = docs + extra[:1]
+        docs = fetch_relevant_chunks(query, query_type)
 
+        if not docs:
+            return {"response": "I couldn't find relevant information. Please visit www.gcuf.edu.pk or contact GCUF directly."}
+
+        if query_type == "fee":
             system_prompt = (
                 "You are GCUF Envoy, the official fee assistant for Government College "
                 "University Faisalabad. You provide accurate fee information from official "
@@ -318,13 +262,6 @@ STUDENT QUESTION: {query}
 Complete fee breakdown:"""
 
         elif query_type == "admission":
-            docs, similar_docs = fetch_from_source(
-                ADMISSION_SOURCE, query,
-                fallback_pages=list(range(1, 8))
-            )
-            extra = [d for d in similar_docs if d.metadata.get("source") != ADMISSION_SOURCE]
-            docs = docs + extra[:1]
-
             system_prompt = (
                 "You are GCUF Envoy, the official admissions assistant for Government College "
                 "University Faisalabad. You provide accurate admission information from "
@@ -351,9 +288,6 @@ STUDENT QUESTION: {query}
 Complete admission answer:"""
 
         else:
-            docs = app.state.vector_db.max_marginal_relevance_search(
-                query, k=8, fetch_k=20
-            )
             system_prompt = (
                 "You are GCUF Envoy, the official AI assistant for Government College "
                 "University Faisalabad. You provide detailed, accurate information about "
@@ -379,8 +313,6 @@ Complete detailed answer:"""
 
         logger.info(f"  Using {len(docs)} chunks from retrieval")
 
-        if not docs:
-            return {"response": "I couldn't find relevant information. Please visit www.gcuf.edu.pk or contact GCUF directly."}
 
         logger.info("  Sending to Groq...")
         answer = ask_groq(system_prompt, user_prompt)
